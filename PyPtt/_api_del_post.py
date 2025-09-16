@@ -75,7 +75,7 @@ def recycle_post_to_mailbox(api, board: str, post_aid: str, ptt_id: str):
     cmd3 = ''.join(cmd_list3)
 
     target_list3  = [
-        connect_core.TargetUnit('儲存完成，請至信箱檢查備忘錄信件', response=command.space, break_detect=True), # This must be the first line
+        connect_core.TargetUnit('儲存完成', response=command.space, break_detect=True), # This must be the first line
         connect_core.TargetUnit('確定要把此份文件回存至信箱嗎', response=''.join(['y', command.enter])),
     ]
 
