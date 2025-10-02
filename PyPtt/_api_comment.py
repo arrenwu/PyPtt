@@ -95,6 +95,9 @@ def _comment(api,
                 first_available_push_type = data_type.CommentType.BOO
 
         log.logger.debug('available_push_type', available_push_type)
+        print(f'available_push_type={available_push_type}')
+        if len(available_push_type) ==0:
+            print(f'push_option_line={push_option_line}')
 
         if available_push_type[push_type] is False:
             if first_available_push_type:

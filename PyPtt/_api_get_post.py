@@ -169,8 +169,11 @@ def _get_mark_status(api, board: str, post_aid: Optional[str] = None, post_index
     # print(cursor_line)
     # ●32731 ! 4 3/04 an94mod0     □ [檢舉] eva05s 4-4
     # ●  169     3/16 abdj0025     R: [討論] C_ChatBM的發文限制
-    MARK_PATTERN = re.compile(r'{} *\d+ (?P<mark>[=MmSs~ +!]) *(?:\d*|爆|X\w) '.format(api.cursor))
+    MARK_PATTERN = re.compile(api.cursor + r' *\d+ (?P<mark>[=MmSs~ +!]) *(?:\d{1,2}|爆|X\w) ?')
+
     mark_match_result = MARK_PATTERN.search(cursor_line)
+    if mark_match_result is None:
+        print(cursor_line)
     result = mark_match_result['mark']
     return '' if result == ' ' else result
 
