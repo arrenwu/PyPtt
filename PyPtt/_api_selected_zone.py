@@ -94,7 +94,11 @@ def copy_toggled_article_to_selected_zone(api, board:str , route: str, confirm_b
 
     latest_index_match_result = LATEST_INDEX_PATTERN.search(cursor_line)
 
-    next_index = int(latest_index_match_result['latest_index']) + 1
+    if latest_index_match_result is None:
+        print("此篇文章應為該精華區的第一篇文章")
+        next_index = 1
+    else:
+        next_index = int(latest_index_match_result['latest_index']) + 1
 
     cmd_list.append(command.ctrl_p)
     cmd = ''.join(cmd_list)
