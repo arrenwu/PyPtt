@@ -93,6 +93,7 @@ string_data = {
     "reply_mail": "回應至作者信箱",
     "require_login": "請先登入",
     "reset_your_contact_email": "請重新設定您的聯絡信箱",
+    "failed_to_perceive_comment_option": "無法辨識推文選項",
     "retry": "重試",
     "search_user": "搜尋使用者",
     "send_mail": "寄信",

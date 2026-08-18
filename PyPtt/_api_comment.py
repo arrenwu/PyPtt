@@ -25,7 +25,8 @@ def _comment(api,
              push_type: data_type.CommentType,
              push_content: str,
              post_aid: str,
-             post_index: int) -> None:
+             post_index: int,
+             ignore_comment_option_error=False) -> None:
     _api_util.goto_board(api, board)
 
     cmd_list = []
@@ -82,7 +83,8 @@ def _comment(api,
             if first_available_push_type is None:
                 first_available_push_type = data_type.CommentType.PUSH
 
-        if '只加→註解' in push_option_line:
+        # if '只加→註解' in push_option_line:
+        if '→' in push_option_line:
             available_push_type[data_type.CommentType.ARROW] = True
 
             if first_available_push_type is None:
@@ -98,6 +100,8 @@ def _comment(api,
         print(f'available_push_type={available_push_type}')
         if len(available_push_type) ==0:
             print(f'push_option_line={push_option_line}')
+            if not ignore_comment_option_error:
+                raise exceptions.CommentOptionError()
 
         if available_push_type[push_type] is False:
             if first_available_push_type:
@@ -204,16 +208,23 @@ def comment(api, board: str, push_type: data_type.CommentType, push_content: str
     push_list = list(filter(None, push_list))
 
     for comment in push_list:
-
         log.logger.info(i18n.comment)
 
-        for _ in range(2):
+        retry_count = 5 # This should be enough.
+        for i in range(retry_count):
             try:
+                # I think we should add a retry mechanism here,
+                # if there is problem in recognizing the comment option
                 _comment(api, board, push_type, comment, post_aid=post_aid, post_index=post_index)
                 break
-            except exceptions.NoFastComment:
+            except (exceptions.NoFastComment, exceptions.CommentOptionError) as e:
                 # screens.show(api.config, api.connect_core.getScreenQueue())
                 log.logger.info(i18n.wait_for_no_fast_comment)
                 time.sleep(5.2)
+
+                if isinstance(e, exceptions.CommentOptionError) and i == retry_count - 1:
+                    log.logger.info(i18n.failed_to_perceive_comment_option)
+                    _comment(api, board, push_type, '1 ' + comment, post_aid=post_aid, post_index=post_index, ignore_comment_option_error=True)
+                    # raise exceptions.CommentOptionError()
 
         log.logger.info(f"{i18n.comment}...{i18n.success}")

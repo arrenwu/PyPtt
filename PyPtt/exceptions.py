@@ -283,3 +283,10 @@ class ParameterError(Error):
 
     def __str__(self):
         return self.message
+
+class CommentOptionError(Error):
+    def __init__(self):
+        self.message = i18n.failed_to_perceive_comment_option
+
+    def __str__(self):
+        return self.message

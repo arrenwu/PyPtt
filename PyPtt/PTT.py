@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+import datetime
 import functools
 import re
 import threading
@@ -861,6 +862,40 @@ class API:
         if user_bucket_status[UserField.is_suspended]:
             effective_bucket_days += user_bucket_status[UserField.remaining_days]
             _api_bucket.lift_bucket(self, board, ptt_id, '追加水桶 {}'.format(reason))
+
+        # Now suspend the user_id with effective_bucket_days
+        _api_bucket.bucket(self, board, effective_bucket_days, reason, ptt_id)
+
+    def bucket_to_date(self, board: str, target_date: datetime.datetime, reason: str, ptt_id: str) -> None:
+        """
+        Suspend a user until a specific date.
+
+        Args:
+            board (str): 看板名稱。
+            target_date (datetime.datetime): The date until which the user will be suspended.
+            reason (str): 水桶原因。
+            ptt_id (str): PTT ID。
+        """
+        assert reason is not None and len(reason) > 0, "The reason is not valid: {}".format(reason)
+        assert isinstance(target_date, datetime.datetime), "target_date must be a datetime object"
+
+        _api_bucket.moderator_operation_reset(self, board, ptt_id)
+
+        user_bucket_status = _api_bucket.get_bucket_status(self, board, ptt_id)
+
+        # Calculate the number of days to suspend
+        now = datetime.datetime.now()
+        if target_date <= now:
+            raise ValueError("target_date must be in the future")
+
+        delta_days = (target_date - now).days
+
+        effective_bucket_days = delta_days
+        if user_bucket_status[UserField.is_suspended]:
+            _api_bucket.lift_bucket(self,
+                                    board,
+                                    ptt_id,
+                                    '追加水桶至 {}'.format(target_date.strftime('%Y-%m-%d')))
 
         # Now suspend the user_id with effective_bucket_days
         _api_bucket.bucket(self, board, effective_bucket_days, reason, ptt_id)

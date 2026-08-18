@@ -93,6 +93,7 @@ string_data = {
     "reply_mail": "Respond to the mailbox of author",
     "require_login": "Please login first",
     "reset_your_contact_email": "Please reset your contact email",
+    "failed_to_perceive_comment_option": "Failed to perceive comment option",
     "retry": "Retry",
     "search_user": "Search user",
     "send_mail": "Send mail",
