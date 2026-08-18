@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-import functools
 import re
 import threading
+from contextlib import contextmanager
+from dataclasses import dataclass
 from typing import Dict, Optional
 
 from . import _api_get_board_info
@@ -14,159 +15,204 @@ from . import log
 from . import screens
 
 
+_MAX_GET_CONTENT_HEIGHT = 100  # PTT server hard cap
+
+
+@contextmanager
+def expanded_screen(api):
+    """Temporarily resize the PTT terminal to its maximum (100 rows) and restore on exit.
+
+    Wraps any paging loop that calls connect_core.send() in a loop so that more
+    content is visible per page and fewer round-trips are needed.  PTT's hard
+    cap is 100 rows regardless of what NAWS requests.
+    """
+    original_height = api.config.screen_height
+    if original_height < _MAX_GET_CONTENT_HEIGHT:
+        api.connect_core.set_screen_height(_MAX_GET_CONTENT_HEIGHT)
+    try:
+        yield
+    finally:
+        if original_height < _MAX_GET_CONTENT_HEIGHT:
+            api.connect_core.set_screen_height(original_height)
+
+
+@dataclass
+class PostQueryResult:
+    lock_post: bool
+    author: str
+    title: str
+    aid: Optional[str]
+    url: Optional[str]
+    money: int
+    list_date: Optional[str]
+    push_number: Optional[str]
+    index: int
+
+
 def get_content(api, post_mode: bool = True):
     api.Unconfirmed = False
 
-    def is_unconfirmed_handler(screen):
-        api.Unconfirmed = True
+    with expanded_screen(api):
+        def is_unconfirmed_handler(screen):
+            api.Unconfirmed = True
 
-    if post_mode:
-        cmd = command.enter * 2
-    else:
-        cmd = command.enter
-
-    target_list = [
-        # 待證實文章
-        connect_core.TargetUnit('本篇文章內容經站方授權之板務管理人員判斷有尚待證實之處', response=' ',
-                                handler=is_unconfirmed_handler),
-        connect_core.TargetUnit(screens.Target.PostEnd, log_level=log.DEBUG, break_detect=True),
-        connect_core.TargetUnit(screens.Target.InPost, log_level=log.DEBUG, break_detect=True),
-        connect_core.TargetUnit(screens.Target.PostNoContent, log_level=log.DEBUG, break_detect=True),
-        # 動畫文章
-        connect_core.TargetUnit(screens.Target.Animation, response='n'),
-    ]
-
-    line_from_pattern = re.compile(r'[\d]+~[\d]+')
-
-    has_control_code = False
-    control_code_mode = False
-    push_start = False
-    content_start_exist = False
-    content_start_jump = False
-    content_start_jump_set = False
-
-    first_page = True
-    origin_post = []
-    stop_dict = dict()
-
-    while True:
-        index = api.connect_core.send(cmd, target_list)
-        if index == 3 or index == 4:
-            return None, False
-
-        last_screen = api.connect_core.get_screen_queue()[-1]
-        lines = last_screen.split('\n')
-        last_line = lines[-1]
-        lines.pop()
-        last_screen = '\n'.join(lines)
-
-        if screens.Target.content_start in last_screen and not content_start_exist:
-            content_start_exist = True
-
-        if content_start_exist:
-            if not content_start_jump_set:
-                if screens.Target.content_start not in last_screen:
-                    content_start_jump = True
-                    content_start_jump_set = True
-            else:
-                content_start_jump = False
-
-        pattern_result = line_from_pattern.search(last_line)
-        if pattern_result is None:
-            control_code_mode = True
-            has_control_code = True
+        if post_mode:
+            cmd = command.enter * 2
         else:
-            last_read_line_list = pattern_result.group(0).split('~')
-            last_read_line_a_temp = int(last_read_line_list[0])
-            last_read_line_b_temp = int(last_read_line_list[1])
-            if control_code_mode:
-                last_read_line_a = last_read_line_a_temp - 1
-                last_read_line_b = last_read_line_b_temp - 1
-            control_code_mode = False
+            cmd = command.enter
 
-        if first_page:
-            first_page = False
-            origin_post.append(last_screen)
-        else:
-            # 這裡是根據觀察畫面行數的變化歸納出的神奇公式...
-            # 輸出的結果是要判斷出畫面的最後 x 行是新的文章內容
-            #
-            # 這裡是 PyPtt 最黑暗最墮落的地方，所有你所知的程式碼守則，在這裡都不適用
-            # 每除完一次錯誤，我會陷入嚴重的創傷後壓力症候群，而我的腦袋會自動選擇遺忘這裡所有的一切
-            # 以確保下一個週一，我可以正常上班
-            # but it works!
+        target_list = [
+            # 待證實文章
+            connect_core.TargetUnit('本篇文章內容經站方授權之板務管理人員判斷有尚待證實之處', response=' ',
+                                    handler=is_unconfirmed_handler),
+            connect_core.TargetUnit(screens.Target.PostEnd, log_level=log.DEBUG, break_detect=True),
+            connect_core.TargetUnit(screens.Target.InPost, log_level=log.DEBUG, break_detect=True),
+            connect_core.TargetUnit(screens.Target.PostNoContent, log_level=log.DEBUG, break_detect=True),
+            # 動畫文章
+            connect_core.TargetUnit(screens.Target.Animation, response='n'),
+        ]
 
-            # print(LastScreen)
-            # print(f'last_read_line_a_temp [{last_read_line_a_temp}]')
-            # print(f'last_read_line_b_temp [{last_read_line_b_temp}]')
-            # print(f'last_read_line_a {last_read_line_a}')
-            # print(f'last_read_line_b {last_read_line_b}')
-            # print(f'GetLineB {last_read_line_a_temp - last_read_line_a}')
-            # print(f'GetLineA {last_read_line_b_temp - last_read_line_b}')
-            # print(f'show line {last_read_line_b_temp - last_read_line_a_temp + 1}')
-            if not control_code_mode:
+        line_from_pattern = re.compile(r'[\d]+~[\d]+')
 
-                if last_read_line_a_temp in stop_dict:
-                    new_content_part = '\n'.join(
-                        lines[-stop_dict[last_read_line_a_temp]:])
-                    stop_dict = dict()
+        has_control_code = False
+        control_code_mode = False
+        push_start = False
+        content_start_exist = False
+        content_start_jump = False
+        content_start_jump_set = False
+
+        first_page = True
+        origin_post = []
+        stop_dict = dict()
+        new_content_part = ''
+        get_line_b = 0
+
+        while True:
+            index = api.connect_core.send(cmd, target_list)
+            if index == 3 or index == 4:
+                return None, False
+
+            last_screen = api.connect_core.get_screen_queue()[-1]
+            lines = last_screen.split('\n')
+            last_line = lines[-1]
+            lines.pop()
+            last_screen = '\n'.join(lines)
+
+            if screens.Target.content_start in last_screen and not content_start_exist:
+                content_start_exist = True
+
+            if content_start_exist:
+                if not content_start_jump_set:
+                    if screens.Target.content_start not in last_screen:
+                        content_start_jump = True
+                        content_start_jump_set = True
                 else:
-                    get_line_b = last_read_line_b_temp - last_read_line_b
-                    if get_line_b > 0:
-                        # print('Type 1')
-                        new_content_part = '\n'.join(lines[-get_line_b:])
-                        if index == 1 and len(new_content_part) == get_line_b - 1:
-                            new_content_part = '\n'.join(lines[-(get_line_b * 2):])
-                        elif origin_post:
-                            last_line_temp = origin_post[-1].strip()
-                            try_line = lines[-(get_line_b + 1)].strip()
+                    content_start_jump = False
 
-                            if not last_line_temp.endswith(try_line):
-                                new_content_part = try_line + '\n' + new_content_part
+            pattern_result = line_from_pattern.search(last_line)
+            if pattern_result is None:
+                control_code_mode = True
+                has_control_code = True
+            else:
+                last_read_line_list = pattern_result.group(0).split('~')
+                last_read_line_a_temp = int(last_read_line_list[0])
+                last_read_line_b_temp = int(last_read_line_list[1])
+                if control_code_mode:
+                    last_read_line_a = last_read_line_a_temp - 1
+                    last_read_line_b = last_read_line_b_temp - 1
+                control_code_mode = False
+
+            if first_page:
+                first_page = False
+                origin_post.append(last_screen)
+            else:
+                # 這裡是根據觀察畫面行數的變化歸納出的神奇公式...
+                # 輸出的結果是要判斷出畫面的最後 x 行是新的文章內容
+                #
+                # 這裡是 PyPtt 最黑暗最墮落的地方，所有你所知的程式碼守則，在這裡都不適用
+                # 每除完一次錯誤，我會陷入嚴重的創傷後壓力症候群，而我的腦袋會自動選擇遺忘這裡所有的一切
+                # 以確保下一個週一，我可以正常上班
+                # but it works!!!
+
+                # print(LastScreen)
+                # print(f'last_read_line_a_temp [{last_read_line_a_temp}]')
+                # print(f'last_read_line_b_temp [{last_read_line_b_temp}]')
+                # print(f'last_read_line_a {last_read_line_a}')
+                # print(f'last_read_line_b {last_read_line_b}')
+                # print(f'GetLineB {last_read_line_a_temp - last_read_line_a}')
+                # print(f'GetLineA {last_read_line_b_temp - last_read_line_b}')
+                # print(f'show line {last_read_line_b_temp - last_read_line_a_temp + 1}')
+                if not control_code_mode:
+
+                    if last_read_line_a_temp in stop_dict:
+                        new_content_part = '\n'.join(
+                            lines[-stop_dict[last_read_line_a_temp]:])
                         stop_dict = dict()
                     else:
-                        # 駐足現象，LastReadLineB跟上一次相比並沒有改變
-                        if (last_read_line_b_temp + 1) not in stop_dict:
-                            stop_dict[last_read_line_b_temp + 1] = 1
-                        stop_dict[last_read_line_b_temp + 1] += 1
+                        get_line_b = last_read_line_b_temp - last_read_line_b
+                        if get_line_b > 0:
+                            # print('Type 1')
+                            new_content_part = '\n'.join(lines[-get_line_b:])
+                            # The doubling and try_line heuristics were tuned for
+                            # 24-row screens (max get_line_b ≈ 22). With larger
+                            # screen_height the delta can be 50+, causing both
+                            # heuristics to look back into the post header rows
+                            # (作者/標題/時間) and inject them into the body.
+                            # Only apply them when the delta is within the original
+                            # 24-row regime.
+                            if get_line_b <= 23:
+                                if index == 1 and len(new_content_part) == get_line_b - 1:
+                                    new_content_part = '\n'.join(lines[-(get_line_b * 2):])
+                                elif origin_post and get_line_b + 1 <= len(lines):
+                                    last_line_temp = origin_post[-1].strip()
+                                    try_line = lines[-(get_line_b + 1)].strip()
 
-                        get_line_a = last_read_line_a_temp - last_read_line_a
-
-                        if get_line_a > 0:
-                            # print(f'Type 2 get_line_a [{get_line_a}]')
-                            new_content_part = '\n'.join(lines[-get_line_a:])
+                                    if not last_line_temp.endswith(try_line):
+                                        new_content_part = try_line + '\n' + new_content_part
+                            stop_dict = dict()
                         else:
-                            new_content_part = '\n'.join(lines)
+                            # 駐足現象，LastReadLineB跟上一次相比並沒有改變
+                            if (last_read_line_b_temp + 1) not in stop_dict:
+                                stop_dict[last_read_line_b_temp + 1] = 1
+                            stop_dict[last_read_line_b_temp + 1] += 1
 
-            else:
-                new_content_part = lines[-1]
+                            get_line_a = last_read_line_a_temp - last_read_line_a
 
-            origin_post.append(new_content_part)
+                            if get_line_a > 0:
+                                # print(f'Type 2 get_line_a [{get_line_a}]')
+                                new_content_part = '\n'.join(lines[-get_line_a:])
+                            else:
+                                new_content_part = '\n'.join(lines)
 
-            log.logger.debug('NewContentPart', new_content_part)
+                else:
+                    new_content_part = lines[-1]
 
-        if index == 1:
-            if content_start_jump and len(new_content_part) == 0:
-                get_line_b += 1
-                new_content_part = '\n'.join(lines[-get_line_b:])
-
-                origin_post.pop()
                 origin_post.append(new_content_part)
-            break
 
-        if not control_code_mode:
-            last_read_line_a = last_read_line_a_temp
-            last_read_line_b = last_read_line_b_temp
+                log.logger.debug('NewContentPart', new_content_part)
 
-        for EC in screens.Target.content_end_list:
-            if EC in last_screen:
-                push_start = True
+            if index == 1:
+                if content_start_jump and len(new_content_part) == 0:
+                    get_line_b += 1
+                    new_content_part = '\n'.join(lines[-get_line_b:])
+
+                    origin_post.pop()
+                    origin_post.append(new_content_part)
                 break
 
-        if push_start:
-            cmd = command.right
-        else:
-            cmd = command.down
+            if not control_code_mode:
+                last_read_line_a = last_read_line_a_temp
+                last_read_line_b = last_read_line_b_temp
+
+            for EC in screens.Target.content_end_list:
+                if EC in last_screen:
+                    push_start = True
+                    break
+
+            if push_start:
+                cmd = command.right
+            else:
+                cmd = command.down
 
     # print(api.Unconfirmed)
     origin_post = '\n'.join(origin_post)
@@ -178,13 +224,9 @@ def get_content(api, post_mode: bool = True):
     return origin_post, has_control_code
 
 
-mail_capacity: Optional[tuple[int, int]] = None
-
-
 def get_mailbox_capacity(api) -> tuple[int, int]:
-    global mail_capacity
-    if mail_capacity is not None:
-        return mail_capacity
+    if api._mail_capacity is not None:
+        return api._mail_capacity
 
     last_screen = api.connect_core.get_screen_queue()[-1]
     capacity_line = last_screen.split('\n')[2]
@@ -199,7 +241,7 @@ def get_mailbox_capacity(api) -> tuple[int, int]:
         log.logger.debug('current_capacity', current_capacity)
         log.logger.debug('max_capacity', max_capacity)
 
-        mail_capacity = (current_capacity, max_capacity)
+        api._mail_capacity = (current_capacity, max_capacity)
         return current_capacity, max_capacity
     return 0, 0
 
@@ -333,7 +375,17 @@ def parse_query_post(api, ori_screen):
     log.logger.debug('ListDate', list_date)
     log.logger.debug('PushNumber', push_number)
 
-    return lock_post, post_author, post_title, post_aid, post_web, post_money, list_date, push_number, post_index
+    return PostQueryResult(
+        lock_post=lock_post,
+        author=post_author,
+        title=post_title,
+        aid=post_aid,
+        url=post_web,
+        money=post_money,
+        list_date=list_date,
+        push_number=push_number,
+        index=post_index,
+    )
 
 
 def get_search_condition_cmd(index_type: data_type.NewIndex, search_list: Optional[list] = None):
@@ -393,6 +445,7 @@ def goto_board(api, board: str, refresh: bool = False, end: bool = False) -> Non
         connect_core.TargetUnit('互動式動畫播放中', log_level=log.DEBUG, response=command.ctrl_c * 5),
         connect_core.TargetUnit(screens.Target.InBoard, log_level=log.DEBUG, break_detect=True),
         connect_core.TargetUnit(screens.Target.InBoardWithCursor, log_level=log.DEBUG, break_detect=True),
+        connect_core.TargetUnit(screens.Target.MainMenu_Exiting, log_level=log.DEBUG, break_detect=True),
     ]
 
     if refresh:
@@ -407,7 +460,19 @@ def goto_board(api, board: str, refresh: bool = False, end: bool = False) -> Non
     # 這裡可能因為發現第一次進入看板會有進版畫面，一般來說都可以在 target_list 找到對應的標的
     # 但某些看板會卡在進版動畫中，但沒有顯示任意鍵繼續或互動是動畫，所以當 index == -1 (表示找不到標的 timeout 了)
     # 可以嘗試修改 cmd_list
-    api.connect_core.send(cmd, target_list, refresh=current_refresh)
+    index = api.connect_core.send(cmd, target_list, refresh=current_refresh)
+    if index == -1 and api.connect_core.last_timeout_was_silent:
+        raise exceptions.ConnectionClosed()
+
+    # index == 4 表示偵測到 MainMenu_Exiting，代表導航到看板失敗
+    # 可能是暫時性的問題（閒置太久、連線狀態改變等），重試一次
+    if index == 4:
+        log.logger.debug('goto_board', board, 'failed, retrying')
+        index = api.connect_core.send(cmd, target_list, refresh=True)
+        if index == -1 and api.connect_core.last_timeout_was_silent:
+            raise exceptions.ConnectionClosed()
+        if index == 4:
+            raise exceptions.NoSuchBoard(api.config, board)
 
     if end:
         cmd_list = []
@@ -429,7 +494,11 @@ def one_thread(api):
         raise exceptions.MultiThreadOperated()
 
 
-@functools.lru_cache(maxsize=64)
+def check_user_exist(api, ptt_id: str) -> None:
+    if ptt_id.lower() not in api._exist_user_list:
+        api.get_user(ptt_id)
+
+
 def check_board(api, board: str, check_moderator: bool = False) -> Dict:
     if board.lower() not in api._exist_board_list:
         board_info = _api_get_board_info.get_board_info(api, board, get_post_kind=False, call_by_others=False)

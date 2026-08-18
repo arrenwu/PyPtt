@@ -20,6 +20,7 @@ APIs
    reply_post
    del_post
    comment
+   get_post_list
 
 信箱相關
 ----------------
@@ -37,6 +38,7 @@ APIs
    get_user
    search_user
    change_pw
+   set_signature_file
 
 取得 PTT 資訊
 -------------------
@@ -48,6 +50,12 @@ APIs
    get_board_info
    get_aid_from_url
    get_bottom_post_list
+
+水球相關
+----------------
+.. toctree::
+
+   get_waterball
 
 版主相關
 ----------------

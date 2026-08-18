@@ -14,8 +14,8 @@ PyPtt
 .. image:: https://img.shields.io/pypi/dm/PyPtt?color=ocean
     :target: https://pypi.org/project/PyPtt/
 
-.. image:: https://github.com/PyPtt/PyPtt/actions/workflows/test.yml/badge.svg?branch=master&color=yellogreen
-    :target: https://github.com/PyPtt/PyPtt/actions/workflows/test.yml
+.. image:: https://github.com/PyPtt/PyPtt/actions/workflows/deploy.yml/badge.svg?branch=master&color=yellogreen
+    :target: https://github.com/PyPtt/PyPtt/actions/workflows/deploy.yml
 
 .. image:: https://img.shields.io/pypi/pyversions/PyPtt
     :target: https://pypi.org/project/PyPtt/
@@ -29,20 +29,21 @@ PyPtt
 
 | PyPtt_ 是時下最流行的 PTT library，你可以在 Python 程式碼裡面使用 PTT 常見的操作，例如：:doc:`推文 <api/comment>`、:doc:`發文 <api/post>`、:doc:`寄信 <api/mail>`、:doc:`讀取信件 <api/get_mail>`、:doc:`讀取文章 <api/get_post>` 等等操作。
 |
-| 本文件的內容會隨著 PyPtt_ 的更新而更新，如果你發現任何錯誤，歡迎到 PyPtt_ 發 issue 或者加入 `PyPtt Telegram 社群`_ 一起討論。
+| 本文件的內容會隨著 PyPtt_ 的更新而更新，如果你發現任何錯誤，歡迎到 PyPtt_ 發 issue 或者加入 `PyPtt Discord 社群`_ 一起討論。
 |
 | PyPtt 由 CodingMan_ 與其他許多的 `貢獻者`_ 共同維護。
 
 .. _PyPtt: https://github.com/PyPtt/PyPtt
-.. _`PyPtt Telegram 社群`: https://t.me/PyPtt
+.. _`PyPtt Discord 社群`: https://discord.gg/8VYtGU5RNB
 .. _CodingMan: https://github.com/PttCodingMan
 .. _`貢獻者`: https://github.com/PyPtt/PyPtt/graphs/contributors
 
 重要消息
 --------------------
-| 2022.12.19 發佈 :doc:`Docker Image <docker>`。
-| 2022.12.08 PyPtt 1.0.0 正式發布
-| 2021.12.08 PyPtt 新增 :doc:`service` 功能
+| 2025.10.18 支援 Python 3.14 Free Threaded
+| 2025.09.06 發佈 `PTT MCP server`_
+
+.. _PTT MCP server: https://github.com/PyPtt/ptt_mcp_server
 
 
 文件
@@ -98,5 +99,5 @@ PyPtt
     Roadmap <roadmap>
     ChangeLog <changelog>
 
-    Source Code <https://github.com/PyPtt/>
+    Source Code <https://github.com/PyPtt/PyPtt>
     PyPI <https://pypi.org/project/PyPtt/>

@@ -29,7 +29,7 @@ def get_bottom_post_list(api, board):
     bottom_length = len(bottom_screen)
 
     if bottom_length == 0:
-        log.logger.info(i18n.catch_bottom_post_success)
+        log.logger.info(i18n.catch_bottom_post, '...', i18n.success)
         return list()
 
     cmd_list = []
@@ -51,12 +51,8 @@ def get_bottom_post_list(api, board):
         api.connect_core.send(cmd, target_list)
         last_screen = api.connect_core.get_screen_queue()[-1]
 
-        lock_post, post_author, post_title, post_aid, post_web, post_money, list_date, push_number, post_index = \
-            _api_util.parse_query_post(
-                api,
-                last_screen)
-
-        aid_list.append(post_aid)
+        q = _api_util.parse_query_post(api, last_screen)
+        aid_list.append(q.aid)
 
         cmd_list = []
         cmd_list.append(command.enter)

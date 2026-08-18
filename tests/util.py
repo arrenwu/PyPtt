@@ -1,8 +1,19 @@
 import json
+import logging
 
 import PyPtt
-from PyPtt import log
-from . import config
+from tests import config
+
+logger = logging.getLogger()
+
+
+def is_primary_host(ptt_bot, ptt_bots):
+    """True for the bot playing the 'PTT1' role: real PTT1, or — when testing
+    against a local image where both bots share HOST.LOCALHOST — the first bot
+    (conftest logs it in as the PTT1_ID account, i.e. the MOD_BOARD moderator)."""
+    if ptt_bot.host == PyPtt.HOST.PTT1:
+        return True
+    return ptt_bot.host == PyPtt.HOST.LOCALHOST and ptt_bot is ptt_bots[0]
 
 
 def log_to_file(msg: str):
@@ -24,36 +35,44 @@ def get_id_pw(password_file):
     return ptt_id, password
 
 
-def login(ptt_bot: PyPtt.API, kick: bool = True):
-    if ptt_bot.host == PyPtt.HOST.PTT1:
+def login(ptt_bot: PyPtt.API, kick: bool = True, max_retries: int = 3, retry_delay: int = 10,
+          account: int = None):
+    import time
+
+    if account == 1:
+        ptt_id, ptt_pw = config.PTT1_ID, config.PTT1_PW
+    elif account == 2:
+        ptt_id, ptt_pw = config.PTT2_ID, config.PTT2_PW
+    elif ptt_bot.host == PyPtt.HOST.PTT1:
         ptt_id, ptt_pw = config.PTT1_ID, config.PTT1_PW
     else:
         ptt_id, ptt_pw = config.PTT2_ID, config.PTT2_PW
 
-    for _ in range(3):
+    for attempt in range(max_retries):
         try:
             ptt_bot.login(ptt_id=ptt_id, ptt_pw=ptt_pw, kick_other_session=kick)
-            break
-        except PyPtt.LoginError:
-            log.logger.info('登入失敗')
-            assert False
+            return
         except PyPtt.WrongIDorPassword:
-            log.logger.info('帳號密碼錯誤')
-            assert False
-        except PyPtt.LoginTooOften:
-            log.logger.info('請稍等一下再登入')
-            assert False
+            logger.info('帳號密碼錯誤')
+            assert False, '帳號密碼錯誤，不重試'
+        except (PyPtt.LoginError, PyPtt.LoginTooOften) as e:
+            if attempt < max_retries - 1:
+                wait = retry_delay * (attempt + 1)
+                logger.info(f'登入失敗 ({e})，{wait} 秒後重試 ({attempt + 1}/{max_retries})')
+                time.sleep(wait)
+            else:
+                assert False, f'登入失敗，已重試 {max_retries} 次: {e}'
 
     if not ptt_bot.is_registered_user:
-        log.logger.info('未註冊使用者')
+        logger.info('未註冊使用者')
 
         if ptt_bot.process_picks != 0:
-            log.logger.info(f'註冊單處理順位 {ptt_bot.process_picks}')
+            logger.info(f'註冊單處理順位 {ptt_bot.process_picks}')
 
 
 def show_data(data, key: str = None):
     if isinstance(data, dict):
-        log.logger.info(f'{key}: {data[key]}')
+        logger.info(f'{key}: {data[key]}')
 
 
 def del_all_post(ptt_bot: PyPtt.API):

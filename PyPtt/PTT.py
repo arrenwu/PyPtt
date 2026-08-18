@@ -19,10 +19,12 @@ from . import _api_get_bottom_post_list
 from . import _api_get_favourite_board
 from . import _api_get_newest_index
 from . import _api_get_post
+from . import _api_get_post_list
 from . import _api_get_time
 from . import _api_get_user
 from . import _api_give_money
 from . import _api_loginout
+from . import _api_get_waterball
 from . import _api_mail
 from . import _api_mark_post
 from . import _api_post
@@ -31,6 +33,7 @@ from . import _api_search_user
 from . import _api_set_board_title
 from . import _api_selected_zone
 from . import _api_util
+from . import _api_set_signature_file
 from . import check_value
 from . import config
 from . import connect_core
@@ -57,6 +60,7 @@ class API:
             logger_callback (Callable): PyPtt 顯示訊息的 callback。預設為 None。
             port (int): PyPtt 連線的 port。預設為 **23**。
             host (:ref:`host`): PyPtt 連線的 PTT 伺服器。預設為 **PTT1**。
+            verify_ssl (bool): 是否驗證 PTT server 端的 TLS 憑證。預設為 **True**。若你的網路環境透過 SSL 攔截 proxy（如企業防火牆），可設為 **False** 以停用驗證。
             check_update (bool): 是否檢查 PyPtt 的更新。預設為 **False**。
 
         Returns:
@@ -93,7 +97,7 @@ class API:
             raise TypeError('[PyPtt] log_level must be log.Level')
 
         logger_callback = kwargs.get('logger_callback', None)
-        log.init(log_level, logger_callback=logger_callback)
+        log.init(log_level=log_level, logger_callback=logger_callback)
 
         language = kwargs.get('language', data_type.Language.MANDARIN)
         if not isinstance(language, str):
@@ -149,13 +153,24 @@ class API:
             raise exceptions.ParameterError('[PyPtt] TELNET is not available on PTT1 and PTT2')
         self.config.connect_mode = connect_mode
 
+        verify_ssl = kwargs.get('verify_ssl', True)
+        check_value.check_type(verify_ssl, bool, 'verify_ssl')
+        self.config.verify_ssl = verify_ssl
+
+        screen_height = kwargs.get('screen_height', 24)
+        check_value.check_type(screen_height, int, 'screen_height')
+        check_value.check_range(screen_height, 24, 254, 'screen_height')
+        self.config.screen_height = screen_height
+
         self.connect_core = connect_core.API(self)
         self._exist_board_list = set()
+        self._exist_user_list = set()
         self._moderators = dict()
         self._thread_id = threading.get_ident()
         self._goto_board_list = set()
         self._board_info_list = dict()
         self._newest_index_data = data_type.TimedDict(timeout=2)
+        self._mail_capacity = None
         self.cursor = None
 
         log.logger.debug('thread_id', self._thread_id)
@@ -224,6 +239,7 @@ class API:
 
         Raises:
             LoginError: 登入失敗。
+            TwoFactorAuthRequired: 偵測到兩階段驗證畫面，PyPtt 無法自動完成驗證。
             WrongIDorPassword: 帳號或密碼錯誤。
             OnlySecureConnection: 只能使用安全連線。
             ResetYourContactEmail: 請先至信箱設定連絡信箱。
@@ -236,6 +252,8 @@ class API:
             try:
                 ptt_bot.login(
                     ptt_id='ptt_id', ptt_pw='ptt_pw', kick_other_session=True)
+            except PyPtt.TwoFactorAuthRequired:
+                print('偵測到兩階段驗證，請先手動登入完成驗證')
             except PyPtt.LoginError:
                 print('登入失敗')
             except PyPtt.WrongIDorPassword:
@@ -318,10 +336,12 @@ class API:
 
         Args:
             board (str): 看板名稱。
-            aid (str): 文章編號。
-            index: 文章編號。
-            search_list (List[str]): 搜尋清單。
-            query (bool): 是否為查詢模式。
+            aid (str): 文章 AID，例如 ``'1TJH_XY0'``。
+            index (int): 文章編號。
+            search_type (:ref:`search-type`): 搜尋類型，與 ``search_condition`` 搭配使用。
+            search_condition (str): 搜尋條件，例如關鍵字或作者 ID。
+            search_list (List[Tuple]): 多條件搜尋清單，每個元素為 ``(SearchType, condition)``。
+            query (bool): 是否為查詢模式，不進入文章內容，僅取得列表資訊。
 
         Returns:
             Dict，文章內容。詳見 :ref:`post-field`
@@ -445,7 +465,8 @@ class API:
         return _api_get_newest_index.get_newest_index(
             self, index_type, board, search_type, search_condition, search_list)
 
-    def post(self, board: str, title_index: int, title: str, content: str, sign_file: [str | int] = 0) -> None:
+    def post(self, board: str, title_index: int, title: str, content: str, sign_file: [str | int] = 0,
+             anonymous: bool = False, display_id: Optional[str] = None) -> None:
         """
         發文。
 
@@ -455,6 +476,12 @@ class API:
             title (str): 文章標題。
             content (str): 文章內容。
             sign_file  (str | int): 編號或隨機簽名檔 (x)，預設為 0 (不選)。
+            anonymous (bool): 是否匿名發文，預設為 False。僅在該看板本身具有匿名 (BRD_ANONYMOUS)
+                屬性時才會生效，一般看板無法透過此參數強制匿名；PyPtt 只能在該提示出現時回覆它。
+            display_id (str): 匿名發文時欲顯示的自訂名稱；預設為 None，代表使用 pttbbs 預設值
+                (預設匿名板為 "Anonymous."，否則為原 ID)。pttbbs 會在暱名 (含預設的 "Anonymous")
+                後方加上一個 "."（例如 display_id='Fox' 會顯示為 "Fox."），此為 pttbbs 固定行為，
+                無法調整。僅能在 anonymous=True 時使用。
 
         Returns:
             None
@@ -464,6 +491,7 @@ class API:
             RequireLogin: 需要登入。
             NoSuchBoard: 看板不存在。
             NoPermission: 沒有發佈權限。
+            ParameterError: display_id 於 anonymous=False 時提供。
 
         範例::
 
@@ -473,13 +501,19 @@ class API:
             try:
                 # .. login ..
                 ptt_bot.post(board='Test', title_index=1, title='PyPtt 程式貼文測試', content='測試內容', sign_file=0)
+                # 匿名發文 (需看板本身具有匿名屬性)
+                ptt_bot.post(board='AnonBoard', title_index=1, title='匿名貼文測試', content='測試內容',
+                             sign_file=0, anonymous=True)
+                # 匿名發文並自訂顯示名稱
+                ptt_bot.post(board='AnonBoard', title_index=1, title='匿名貼文測試', content='測試內容',
+                             sign_file=0, anonymous=True, display_id='Fox')
                 # .. do something ..
             finally:
                 ptt_bot.logout()
 
         """
 
-        _api_post.post(self, board, title, content, title_index, sign_file)
+        _api_post.post(self, board, title, content, title_index, sign_file, anonymous, display_id)
 
     def comment(self, board: str, comment_type: data_type.CommentType, content: str, aid: Optional[str] = None,
                 index: int = 0) -> None:
@@ -659,7 +693,7 @@ class API:
         return _api_get_board_list.get_board_list(self)
 
     def reply_post(self, reply_to: data_type.ReplyTo, board: str, content: str, sign_file: [str | int] = 0,
-                   aid: Optional[str] = None, index: int = 0) -> None:
+                   aid: Optional[str] = None, index: int = 0, backup: bool = True) -> None:
 
         """
         回覆文章。
@@ -671,6 +705,8 @@ class API:
             sign_file (str | int): 編號或隨機簽名檔 (x)，預設為 **0** (不選)。
             aid: 文章編號。
             index: 文章編號。
+            backup (bool): 回信給作者時是否自存底稿，預設為 True。僅在 reply_to 為 MAIL 時有作用；
+                BOARD_MAIL 實測不會出現自存底稿提示，該路徑下此參數無效。
 
         Returns:
             None
@@ -697,7 +733,7 @@ class API:
         參考 :ref:`回覆類型 <reply-to>`、:ref:`取得最新文章編號 <api-get-newest-index>`
         """
 
-        _api_reply_post.reply_post(self, reply_to, board, content, sign_file, aid, index)
+        _api_reply_post.reply_post(self, reply_to, board, content, sign_file, aid, index, backup)
 
     def set_board_title(self, board: str, new_title: str) -> None:
         """
@@ -752,6 +788,37 @@ class API:
         """
         mark_status =  self.get_mark_status(board, aid, index)
         return mark_status == 'm' or mark_status == '=' or mark_status == 'M'
+    def set_signature_file(self, content: str) -> None:
+
+        """
+        更新登入帳號的名片檔（PTT 的 plan），對應【個人設定】->【個人檔案】
+        ->(Q)ueryEdit 編輯名片檔的功能。`get_user()` 回傳的 `signature_file`
+        欄位讀的就是這份內容。
+
+        Args:
+            content (str): 新的名片檔內容，會整份取代原本的內容。
+
+        Returns:
+            None
+
+        Raises:
+            RequireLogin: 需要登入。
+
+        範例::
+
+            import PyPtt
+
+            ptt_bot = PyPtt.API()
+            try:
+                # .. login ..
+                ptt_bot.set_signature_file(content='你好，我是 PyPtt')
+                # .. do something ..
+            finally:
+                ptt_bot.logout()
+
+        """
+
+        _api_set_signature_file.set_signature_file(self, content)
 
     def mark_post(self, mark_type: int, board: str, aid: Optional[str] = None, index: int = 0, search_type: int = 0,
                   search_condition: Optional[str] = None) -> None:
@@ -1032,6 +1099,22 @@ class API:
             finally:
                 ptt_bot.logout()
 
+        以作者搜尋信件（先用 get_newest_index 取得該作者的信件數，再逐封取得）::
+
+            import PyPtt
+
+            ptt_bot = PyPtt.API()
+
+            search_list = [(PyPtt.SearchType.AUTHOR, 'CodingMan')]
+
+            try:
+                # .. login ..
+                count = ptt_bot.get_newest_index(PyPtt.NewIndex.MAIL, search_list=search_list)
+                mail = ptt_bot.get_mail(index=count, search_list=search_list)
+                # .. do something ..
+            finally:
+                ptt_bot.logout()
+
         參考 :doc:`get_newest_index`
         """
 
@@ -1068,6 +1151,40 @@ class API:
         """
 
         _api_mail.del_mail(self, index)
+
+    def get_waterball(self, post_action: data_type.WaterballPostAction = data_type.WaterballPostAction.KEEP) -> List[Dict]:
+        """
+        取得水球紀錄。
+
+        Args:
+            post_action (:ref:`waterball-post-action`): 取得水球後的處理方式，預設為 KEEP。
+
+        Returns:
+            List[Dict]，水球紀錄清單，詳見 :ref:`waterball-field`。
+
+        Raises:
+            RequireLogin: 需要登入。
+            UnregisteredUser: 未註冊使用者。
+
+        範例::
+
+            import PyPtt
+
+            ptt_bot = PyPtt.API()
+            try:
+                # .. login ..
+                waterball_list = ptt_bot.get_waterball(post_action=PyPtt.WaterballPostAction.KEEP)
+                for waterball in waterball_list:
+                    print(waterball[PyPtt.WaterballField.type])
+                    print(waterball[PyPtt.WaterballField.target])
+                    print(waterball[PyPtt.WaterballField.content])
+                    print(waterball[PyPtt.WaterballField.date])
+                # .. do something ..
+            finally:
+                ptt_bot.logout()
+        """
+
+        return _api_get_waterball.get_waterball(self, post_action)
 
     def change_pw(self, new_password: str) -> None:
         """
@@ -1152,7 +1269,9 @@ class API:
 
         return _api_get_bottom_post_list.get_bottom_post_list(self, board)
 
-    def del_post(self, board: str, aid: Optional[str] = None, index: int = 0) -> None:
+    def del_post(self, board: str, aid: Optional[str] = None, index: int = 0, reason: Optional[str] = None,
+                 bad_post_type: Optional[data_type.BadPostType] = None,
+                 bad_post_reason: Optional[str] = None) -> None:
         """
         刪除文章。
 
@@ -1160,6 +1279,11 @@ class API:
             board (str): 看板名稱。
             aid (str): 文章編號。
             index (int): 文章編號。
+            reason (str): 板主刪除他人文章時，加註於刪除後標題的理由（僅板主刪除他板友文章時有效）。
+            bad_post_type (data_type.BadPostType): 板主刪除他人文章時，對作者記的惡退（劣文）分類，
+                僅板主刪除他板友文章時有效。
+            bad_post_reason (str): 惡退理由，僅 ``bad_post_type`` 為 ``BadPostType.OTHER`` 時可傳入且必須傳入，
+                長度上限 50 字。
 
         Returns:
             None
@@ -1170,6 +1294,12 @@ class API:
             NoSuchBoard: 看板不存在。
             NoSuchPost: 文章不存在。
             NoPermission: 沒有權限。
+            ParameterError: 對自己的文章傳入 reason 或 bad_post_type（僅適用於版主刪除他人文章），
+                或 bad_post_type 為 BadPostType.OTHER 卻未傳入 bad_post_reason（或超過 50 bytes，
+                或含有控制字元）。
+            BadPostNotRecorded: 傳入 bad_post_type 時，文章已成功刪除，但 PTT 端沒有完成惡退
+                （劣文）記錄流程（例如文章太舊而跳過惡退選單、或逾時）。代表刪除本身已經成功，
+                只是這支惡退沒有記上。
 
         範例::
 
@@ -1179,12 +1309,45 @@ class API:
             try:
                 # .. login ..
                 ptt_bot.del_post(board='Python', aid='1TJH_XY0')
+                # 板主刪除他人文章，並記一支「廣告」惡退
+                ptt_bot.del_post(board='Python', aid='1TJH_XY0',
+                                  bad_post_type=PyPtt.BadPostType.AD)
                 # .. do something ..
             finally:
                 ptt_bot.logout()
         """
 
-        _api_del_post.del_post(self, board, aid, index)
+        _api_del_post.del_post(self, board, aid, index, reason, bad_post_type, bad_post_reason)
+
+    def get_post_list(self, board: str, limit: int = 20, offset: int = 0) -> list[dict]:
+        """
+        取得文章列表。
+
+        Args:
+            board (str): 看板名稱。
+            limit (int): 取得文章數量，預設為 20。
+            offset (int): 偏移量，預設為 0。
+        Returns:
+            list[dict]，文章列表，詳見 :ref:`post-field`。
+
+        Raises:
+            RequireLogin: 需要登入。
+            NoSuchBoard: 看板不存在。
+
+        範例::
+
+            import PyPtt
+
+            ptt_bot = PyPtt.API()
+            try:
+                # .. login ..
+                post_list = ptt_bot.get_post_list(board='Python', limit=10, offset=0)
+                # .. do something ..
+            finally:
+                ptt_bot.logout()
+        """
+
+        return _api_get_post_list.get_post_list(self, board, limit, offset)
 
     def copy_article_to_selected_zone(self, board: str, route: str, aid: Optional[str] = None, index: int = 0,  ):
         """

@@ -33,9 +33,22 @@ def mail(api,
 
     check_value.check_type(ptt_id, str, 'ptt_id')
     check_value.check_type(title, str, 'title')
+    # mbbsd/mail.c:774-775 char tmp_title[STRLEN-20]; include/pttstruct.h:313
+    # STRLEN 80 -> len=60 -> vtuikit.c's getdata() only accepts len-1 bytes,
+    # and vkey_purge() clears the whole input queue if the overflow byte
+    # lands right after a Big5 lead byte -- so the safe cap is len-2 = 58.
+    try:
+        encoded_title = title.encode('big5uao')
+    except UnicodeEncodeError as e:
+        raise exceptions.ParameterError(
+            f'title contains a character that cannot be encoded in Big5: {e}') from e
+    if len(encoded_title) > 58:
+        raise exceptions.ParameterError('title must not exceed 58 bytes')
     check_value.check_type(content, str, 'content')
+    # 沒擋型別的話，backup='False' 這種字串是 truthy，會靜靜地存底稿。
+    check_value.check_type(backup, bool, 'backup')
 
-    api.get_user(ptt_id)
+    _api_util.check_user_exist(api, ptt_id)
 
     check_sign_file = False
     for i in range(0, 10):
@@ -46,6 +59,8 @@ def mail(api,
     if not check_sign_file:
         if sign_file.lower() != 'x':
             raise exceptions.ParameterError(f'wrong parameter sign_file: {sign_file}')
+
+    content = lib_util.uniform_new_line(content)
 
     cmd_list = []
     # 回到主選單
@@ -90,8 +105,14 @@ def mail(api,
         connect_core.TargetUnit('請按任意鍵繼續', response=command.enter, break_detect_after_send=True),
         connect_core.TargetUnit('確定要儲存檔案嗎', response='s' + command.enter),
         connect_core.TargetUnit('是否自存底稿', response=('y' if backup else 'n') + command.enter),
-        connect_core.TargetUnit('選擇簽名檔', response=str(sign_file) + command.enter),
-        connect_core.TargetUnit('x=隨機', response=str(sign_file) + command.enter),
+        # max_match=1 是防禦性上限，簽名檔提示只該被回答一次。真 PTT 與本地 pttbbs 都
+        # 實測過（monkeypatch TargetUnit.is_match 計數）：寄信流程從「確定要儲存檔案嗎」
+        # 直接跳到「已順利寄出，是否自存底稿」，這個 target 一次都沒命中，推測要帳號設過
+        # 簽名檔才會出現。假說是沒有上限時提示殘留在重繪畫面上會二次命中、多送的 enter
+        # 被自存底稿當成預設 Y 吃掉讓 backup 失效——該情境尚未實際復現，上限先留著。
+        # 巢狀 list = 命中任一字串；'選擇簽名檔' 與 'x=隨機' 是同一行提示的兩種寫法。
+        connect_core.TargetUnit([['選擇簽名檔', 'x=隨機']],
+                                response=str(sign_file) + command.enter, max_match=1),
     ]
 
     # 送出訊息
@@ -107,7 +128,6 @@ def mail(api,
 # ※ 發信站: 批踢踢實業坊(ptt.cc)
 # ◆ From: 220.142.14.95
 content_start = '───────────────────────────────────────'
-content_end = '--\n※ 發信站: 批踢踢實業坊(ptt.cc)'
 content_ip_old = '◆ From: '
 
 mail_author_pattern = re.compile(r'作者  (.+)')
@@ -143,6 +163,21 @@ def get_mail(api, index: int, search_type: Optional[data_type.SearchType] = None
     # 進入信箱
     cmd_list.append(command.ctrl_z)
     cmd_list.append('m')
+
+    # search_type/search_condition 併入 search_list（比照 get_post），
+    # 否則單獨使用 search_type 搜尋會被忽略。
+    if search_list is None:
+        search_list = []
+    else:
+        check_value.check_type(search_list, list, 'search_list')
+        search_list = list(search_list)  # 別就地改到呼叫端傳進來的 list
+
+    if (search_type, search_condition) != (None, None):
+        search_list.insert(0, (search_type, search_condition))
+
+    for search_type, search_condition in search_list:
+        check_value.check_type(search_type, data_type.SearchType, 'search_type')
+        check_value.check_type(search_condition, str, 'search_condition')
 
     # 處理條件整理出指令
     _cmd_list = _api_util.get_search_condition_cmd(data_type.NewIndex.MAIL, search_list)
@@ -209,7 +244,7 @@ def get_mail(api, index: int, search_type: Optional[data_type.SearchType] = None
 
     # 紅包偵測
     red_envelope = False
-    if content_end not in origin_mail and 'Ptt幣的大紅包喔' in origin_mail:
+    if not any(EC in origin_mail for EC in screens.Target.content_end_list) and 'Ptt幣的大紅包喔' in origin_mail:
         mail_content = mail_content.strip()
         red_envelope = True
 
@@ -223,7 +258,8 @@ def get_mail(api, index: int, search_type: Optional[data_type.SearchType] = None
         # 非紅包開始解析 ip 與 地區
 
         ip_line_list = origin_mail.split('\n')
-        ip_line = [x for x in ip_line_list if x.startswith(content_end[3:])]
+        ip_line = [x for x in ip_line_list
+                   if any(x.startswith(EC[3:]) for EC in screens.Target.content_end_list)]
 
         if len(ip_line) == 0:
             # 沒 ip 就沒地區
@@ -275,7 +311,7 @@ def del_mail(api, index) -> None:
         raise exceptions.UnregisteredUser(lib_util.get_current_func_name())
 
     current_index = api.get_newest_index(data_type.NewIndex.MAIL)
-    check_value.check_index(index, current_index)
+    check_value.check_index('index', index, current_index)
 
     cmd_list = []
     # 進入主選單

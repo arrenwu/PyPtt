@@ -3,9 +3,11 @@ string_data = {
     "PTT2": "PTT2",
     "active": "Active",
     "author": "Author",
+    "bad_post": "bad post",
+    "bad_post_not_recorded": "the post was deleted, but the bad-post record was not made",
     "board": "Board",
     "can_not_use_search_post_code_f": "This status can not use the search PostField code function",
-    "catch_bottom_post_success": "Catch bottom post success",
+    "catch_bottom_post": "Catch bottom post",
     "change_pw": "Change password",
     "comment": "Comment",
     "comment_content": "Comment content",
@@ -30,6 +32,7 @@ string_data = {
     "get_board_info": "Get board info _target0_",
     "get_favourite_board_list": "Query favourite board list",
     "get_mail": "Get mail",
+    "get_waterball": "Get waterball records",
     "give_money_to": "give _target0_ _target1_ P coins",
     "goodbye": [
         "good bye",
@@ -101,12 +104,21 @@ string_data = {
     "set_connect_host": "Set up the connect host",
     "set_connect_mode": "Set up the connect mode",
     "set_contact_mail_first": "Password can only be changed after setting the contact mailbox",
+    "set_signature_file": "Update signature file",
     "set_up_lang_module": "Set up language module",
     "spend_time": "Spend time",
     "substandard_post": "Substandard post",
     "success": "Success",
     "title": "Title",
     "transaction_cancelled": "The transaction is cancelled!",
+    "two_factor_auth_required": (
+        "This account has two-factor authentication (2FA) enabled, and PyPtt cannot "
+        "complete the verification automatically. PTT's 2FA can be configured to only "
+        "require verification from new IPs, so logging in again from the same IP will "
+        "skip it. Please first manually log in to PTT from this machine using a regular "
+        "BBS client and complete one 2FA verification; afterwards this machine's IP will "
+        "be considered verified, and you can then log in with PyPtt."
+    ),
     "unregistered_user_cant_use_all_api": "Unregistered UserField Can't Use All API",
     "unregistered_user_cant_use_this_api": "Unregistered UserField Can't Use This API",
     "update_remote_version": "Fetching latest version",
@@ -115,6 +127,7 @@ string_data = {
     "user_has_previously_been_banned": "User has previously been banned",
     "user_offline": "User offline",
     "wait_for_no_fast_comment": "Because no fast comment, wait 5 sec",
-    "welcome": "PyPtt v _target0_ developed by CodingMan",
-    "wrong_id_pw": "Wrong id or pw"
+    "welcome": "PyPtt v _target0_",
+    "wrong_id_pw": "Wrong id or pw",
+    "unknown_error": "Unknown error",
 }

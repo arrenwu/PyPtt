@@ -30,28 +30,40 @@ def get_user(api, ptt_id: str) -> Dict:
     if len(ptt_id) < 2:
         raise exceptions.ParameterError(f'wrong parameter user_id: {ptt_id}')
 
-    cmd_list = []
-    cmd_list.append(command.go_main_menu)
-    cmd_list.append('T')
-    cmd_list.append(command.enter)
-    cmd_list.append('Q')
-    cmd_list.append(command.enter)
-    cmd_list.append(ptt_id)
-    cmd_list.append(command.enter)
+    # Step 1: Navigate to Talk menu.
+    # AnyKey auto-dismiss is safe here because no query commands are pending.
+    cmd = command.go_main_menu + 'T' + command.enter
 
-    cmd = ''.join(cmd_list)
+    target_list = [
+        connect_core.TargetUnit(screens.Target.InTalk, break_detect=True),
+        connect_core.TargetUnit(screens.Target.AnyKey, response=' '),
+    ]
+
+    nav_index = api.connect_core.send(cmd, target_list)
+
+    # Step 2: Query user.
+    # Use AnyKey as break target — it's at the very bottom of the user info
+    # screen, so matching it confirms the screen is fully transmitted.
+    cmd = 'Q' + command.enter + ptt_id + command.enter
+
+    # Use InTalk as a non-break target that auto-responds with the
+    # query command, and max_match=1 to prevent re-matching on
+    # intermediate screens (race condition fix).
+    query_cmd = 'Q' + command.enter + ptt_id + command.enter
 
     target_list = [
         connect_core.TargetUnit(screens.Target.AnyKey, break_detect=True),
-        connect_core.TargetUnit(screens.Target.InTalk, break_detect=True),
+        connect_core.TargetUnit(screens.Target.InTalk,
+                                response=query_cmd,
+                                max_match=1),
     ]
 
-    index = api.connect_core.send(
-        cmd,
-        target_list)
-    ori_screen = api.connect_core.get_screen_queue()[-1]
-    if index == 1:
+    index = api.connect_core.send(cmd, target_list)
+    if index != 0:
+        if api.connect_core.last_timeout_was_silent:
+            raise exceptions.ConnectionClosed()
         raise exceptions.NoSuchUser(ptt_id)
+    ori_screen = api.connect_core.get_screen_queue()[-1]
     # PTT1
     # 《ＩＤ暱稱》CodingMan (專業程式 BUG 製造機)《經濟狀況》小康 ($73866)
     # 《登入次數》1118 次 (同天內只計一次) 《有效文章》15 篇 (退:0)
@@ -75,7 +87,13 @@ def get_user(api, ptt_id: str) -> Dict:
 
     # 《個人名片》CodingMan 目前沒有名片
 
-    lines = ori_screen.split('\n')[1:]
+    lines = ori_screen.split('\n')
+
+    def find_line(marker):
+        for i, line in enumerate(lines):
+            if marker in line:
+                return i, line
+        return -1, ''
 
     def parse_user_info_from_line(line: str) -> (str, str):
         part_0 = line[line.find('》') + 1:]
@@ -85,25 +103,45 @@ def get_user(api, ptt_id: str) -> Dict:
 
         return part_0, part_1
 
-    ptt_id, buff_1 = parse_user_info_from_line(lines[0])
+    id_idx, id_line = find_line('《ＩＤ暱稱》')
+    login_idx, login_line = find_line('《登入次數》')
+    activity_idx, activity_line = find_line('《目前動態》')
+    last_login_idx, last_login_line = find_line('《上次上站》')
+    chess_idx, chess_line = find_line('《 五子棋 》')
+
+    if any(idx == -1 for idx in [id_idx, login_idx, activity_idx, last_login_idx, chess_idx]):
+        log.logger.debug('get_user_parse_error', ori_screen)
+        raise exceptions.UnknownError(f'get_user parse error: {ori_screen}')
+
+    ptt_id, buff_1 = parse_user_info_from_line(id_line)
     money = int(int_list[0]) if len(int_list := re.findall(r'\d+', buff_1)) > 0 else buff_1
-    buff_0, buff_1 = parse_user_info_from_line(lines[1])
+
+    buff_0, buff_1 = parse_user_info_from_line(login_line)
 
     login_count = int(re.findall(r'\d+', buff_0)[0])
     account_verified = ('同天內只計一次' in buff_0)
     legal_post = int(re.findall(r'\d+', buff_1)[0])
 
     # PTT2 沒有退文
-    if api.config.host == data_type.HOST.PTT1:
-        illegal_post = int(re.findall(r'\d+', buff_1)[1])
-    else:
+    if api.config.host == data_type.HOST.PTT2:
         illegal_post = None
+    else:
+        int_list = re.findall(r'\d+', buff_1)
+        if len(int_list) > 1:
+            illegal_post = int(int_list[1])
+        elif api.config.host == data_type.HOST.PTT1:
+            # Historical PTT1 behaviour: default to 0 rather than "unavailable".
+            illegal_post = 0
+        else:
+            # Non-PTT1 hosts (e.g. LOCALHOST) that fail to parse a second
+            # number: report "unavailable" rather than a fabricated 0.
+            illegal_post = None
 
-    activity, mail = parse_user_info_from_line(lines[2])
-    last_login_date, last_login_ip = parse_user_info_from_line(lines[3])
-    five_chess, chess = parse_user_info_from_line(lines[4])
+    activity, mail = parse_user_info_from_line(activity_line)
+    last_login_date, last_login_ip = parse_user_info_from_line(last_login_line)
+    five_chess, chess = parse_user_info_from_line(chess_line)
 
-    signature_file = '\n'.join(lines[5:-1]).strip('\n')
+    signature_file = '\n'.join(lines[chess_idx + 1:-1]).strip('\n')
 
     log.logger.debug('ptt_id', ptt_id)
     log.logger.debug('money', money)
@@ -134,5 +172,7 @@ def get_user(api, ptt_id: str) -> Dict:
         UserField.chess: chess,
         UserField.signature_file: signature_file,
     }
+    api._exist_user_list.add(ptt_id.lower())
+
     user = json.dumps(user, cls=AutoJsonEncoder)
     return json.loads(user)

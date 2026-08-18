@@ -53,6 +53,7 @@ def login(api, ptt_id: str, ptt_pw: str, kick_other_session: bool) -> None:
 
     if api._is_login:
         api.logout()
+        api._is_login = False
 
     api.config.kick_other_session = kick_other_session
 
@@ -66,7 +67,9 @@ def login(api, ptt_id: str, ptt_pw: str, kick_other_session: bool) -> None:
         api.process_picks = int(pattern.search(screen).group(0))
 
     ptt_id = ptt_id[:12].strip()
-    ptt_pw = ptt_pw[:8].strip()
+    # 不截斷密碼: 舊版 PTT 由 server 端忽略第 8 字之後的部分, 新版 (pttbbs #112, bcrypt)
+    # 則支援 72 字元, 兩邊都必須送出完整密碼才會正確。
+    ptt_pw = ptt_pw.strip()
 
     api.ptt_id = ptt_id
     api._ptt_pw = ptt_pw
@@ -93,6 +96,8 @@ def login(api, ptt_id: str, ptt_pw: str, kick_other_session: bool) -> None:
         connect_core.TargetUnit('密碼正確'),
         connect_core.TargetUnit('您想刪除其他重複登入的連線嗎', response=kick_other_login_response),
         connect_core.TargetUnit('◆ 您的註冊申請單尚在處理中', response=command.enter, handler=register_processing),
+        # 需排在「任意鍵」等泛用 catch-all 之前, 否則會被搶先命中而吃不到這條。
+        connect_core.TargetUnit('兩階段', break_detect=True, exceptions_=exceptions.TwoFactorAuthRequired()),
         connect_core.TargetUnit('任意鍵', response=' '),
         connect_core.TargetUnit('正在更新與同步線上使用者及好友名單'),
         connect_core.TargetUnit('【分類看板】', response=command.go_main_menu),

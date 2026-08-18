@@ -3,14 +3,13 @@ from __future__ import annotations
 import asyncio
 import os.path
 import ssl
-import telnetlib
 import tempfile
-import threading
 import time
 import traceback
 import warnings
 from typing import Any
 
+import certifi
 import websockets
 import websockets.exceptions
 
@@ -22,25 +21,30 @@ from . import log
 from . import screens
 from . import ssl_config
 
-__version__='1.1.2'
+from .. import PyPtt
 
+# ponytail: pass the UA per-connect instead of mutating websockets' module global.
+# The global is baked into connect()'s default arg the moment websockets lazily
+# imports asyncio.client, so mutating it only works if you get there first —
+# order-dependent action at a distance. (websockets.http also went away in 15.)
 try:
-    import websockets.http
+    from websockets.http11 import USER_AGENT as _WS_USER_AGENT
+except ImportError:  # websockets < 13
+    from websockets.http import USER_AGENT as _WS_USER_AGENT
 
-    websockets.http.USER_AGENT += f' PyPtt/{__version__}'
-    use_http11 = False
-except AttributeError:
-    import websockets.http11
+# __version__='1.1.2'  Old setup
 
-    websockets.http11.USER_AGENT += f' PyPtt/{__version__}'
-    use_http11 = True
+USER_AGENT = f'{_WS_USER_AGENT} PyPtt/{PyPtt.__version__}'
 
-ssl_context = None
-
-
-def ssl_init():
-    global ssl_context
-
+def ssl_init(verify_ssl: bool = True) -> ssl.SSLContext:
+    # Verify the PTT server certificate against the system CA bundle.
+    # The client cert loaded below is *not* for identity (PTT does not
+    # validate it); it exists purely to make the TLS handshake succeed in
+    # environments where omitting a Certificate message breaks negotiation.
+    # See PyPtt/ssl_config.py for details.
+    #
+    # Pass verify_ssl=False only when connecting through an SSL-inspecting
+    # proxy whose CA cert is not in the system trust store.
     cert_file = tempfile.NamedTemporaryFile(delete=False, suffix='.pem')
     cert_file.write(ssl_config.cert.encode('utf-8'))
 
@@ -50,17 +54,20 @@ def ssl_init():
     cert_file.close()
     key_file.close()
 
-    ssl_context = ssl.create_default_context()
-    ssl_context.check_hostname = False
-    ssl_context.load_cert_chain(certfile=cert_file.name, keyfile=key_file.name)
-    ssl_context.minimum_version = ssl.TLSVersion.TLSv1_2
-    ssl_context.verify_mode = ssl.CERT_NONE
+    # certifi 的 CA bundle 隨 requests 一起裝，避免 macOS 官方 python 沒根憑證時
+    # 出現 CERTIFICATE_VERIFY_FAILED，且不必靠使用者設 SSL_CERT_FILE。
+    ctx = ssl.create_default_context(cafile=certifi.where())
+    ctx.load_cert_chain(certfile=cert_file.name, keyfile=key_file.name)
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+
+    if not verify_ssl:
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
 
     os.unlink(cert_file.name)
     os.unlink(key_file.name)
 
-
-ssl_init()
+    return ctx
 
 
 class TargetUnit:
@@ -134,22 +141,6 @@ class TargetUnit:
         return self._secret
 
 
-class RecvData:
-    def __init__(self):
-        self.data = None
-
-
-async def websocket_recv_func(core, recv_data_obj):
-    recv_data_obj.data = await core.recv()
-
-
-async def websocket_receiver(core, screen_timeout, recv_data_obj):
-    # Wait for at most 1 second
-    await asyncio.wait_for(
-        websocket_recv_func(core, recv_data_obj),
-        timeout=screen_timeout)
-
-
 class ReceiveDataQueue(object):
     def __init__(self):
         self._ReceiveDataQueue = []
@@ -171,6 +162,21 @@ class API(object):
         self._RDQ = ReceiveDataQueue()
         self._UseTooManyResources = TargetUnit(screens.Target.use_too_many_resources,
                                                exceptions_=exceptions.UseTooManyResources())
+        self._loop = None
+        self._stream_parsers = {}
+        self._ssl_context = ssl_init(self.config.verify_ssl)
+        self.last_timeout_was_silent = False
+
+    def _get_event_loop(self):
+        if self._loop and not self._loop.is_closed():
+            return self._loop
+
+        try:
+            self._loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self._loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self._loop)
+        return self._loop
 
     def connect(self) -> None:
         def _wait():
@@ -190,46 +196,53 @@ class API(object):
         warnings.filterwarnings("ignore", category=DeprecationWarning)
 
         self.current_encoding = 'big5uao'
-        # self.log.py.info(i18n.connect_core, i18n.active)
 
         if self.config.host == data_type.HOST.PTT1:
-            telnet_host = 'ptt.cc'
             websocket_host = 'wss://ws.ptt.cc/bbs/'
             websocket_origin = 'https://term.ptt.cc'
         elif self.config.host == data_type.HOST.PTT2:
-            telnet_host = 'ptt2.cc'
             websocket_host = 'wss://ws.ptt2.cc/bbs/'
             websocket_origin = 'https://term.ptt2.cc'
         elif self.config.host == data_type.HOST.LOCALHOST:
-            telnet_host = 'localhost'
-            websocket_host = 'wss://localhost'
-            websocket_origin = 'https://term.ptt.cc'
+            # ponytail: local pttbbs docker image (bbsdocker/imageptt) serves plain ws
+            # (no TLS) on 48763; config.port defaults to 23 (telnet default) so treat
+            # that as "not set" and fall back to imageptt's default port
+            port = self.config.port if self.config.port != 23 else 48763
+            websocket_host = f'ws://localhost:{port}/bbs'
+            websocket_origin = 'http://localhost'
         else:
-            telnet_host = self.config.host
             websocket_host = f'wss://{self.config.host}'
             websocket_origin = 'https://term.ptt.cc'
 
         connect_success = False
+        loop = self._get_event_loop()
 
         for _ in range(2):
-
             try:
-                if self.config.connect_mode == data_type.ConnectMode.TELNET:
-                    self._core = telnetlib.Telnet(telnet_host, self.config.port)
-                else:
-                    if threading.current_thread() is not threading.main_thread():
-                        loop = asyncio.new_event_loop()
-                        asyncio.set_event_loop(loop)
-
-                    log.logger.debug('USER_AGENT',
-                                     websockets.http11.USER_AGENT if use_http11 else websockets.http.USER_AGENT)
-                    self._core = asyncio.get_event_loop().run_until_complete(
-                        websockets.connect(
-                            websocket_host,
-                            origin=websocket_origin,
-                            ssl=ssl_context))
-
+                log.logger.debug('USER_AGENT', USER_AGENT)
+                # ponytail: ws:// (local docker target) can't take an ssl context —
+                # websockets errors out if you pass one on a non-wss URI
+                connect_kwargs = {'origin': websocket_origin,
+                                  'user_agent_header': USER_AGENT}
+                if websocket_host.startswith('wss://'):
+                    connect_kwargs['ssl'] = self._ssl_context
+                self._core = loop.run_until_complete(
+                    websockets.connect(
+                        websocket_host,
+                        **connect_kwargs))
+                # Respond to PTT's IAC DO NAWS (ff fd 1f) and announce terminal size.
+                # PTT honours any height >= 24; larger values reduce get_content iterations.
+                # PTT's hard cap is 100 rows regardless of what we send.
+                # h is validated to 24–254; 255 is excluded because 0xFF inside a
+                # Telnet SB payload must be doubled (RFC 854) — simpler to cap at 254.
+                h = self.config.screen_height
+                naws = (
+                    b'\xff\xfb\x1f'                          # IAC WILL NAWS
+                    + b'\xff\xfa\x1f\x00\x50' + bytes([0, h]) + b'\xff\xf0'  # IAC SB NAWS 80×h IAC SE
+                )
+                loop.run_until_complete(self._core.send(naws))
                 connect_success = True
+                break
             except Exception as e:
                 traceback.print_tb(e.__traceback__)
                 print(e)
@@ -246,18 +259,13 @@ class API(object):
                 _wait()
                 continue
 
-            break
-
         if not connect_success:
             raise exceptions.ConnectError(self.config)
 
-    def _decode_screen(self, receive_data_buffer, start_time, target_list, is_secret, refresh, msg):
+    def _decode_screen(self, screen, start_time, target_list, is_secret, refresh, msg):
 
         break_detect_after_send = False
         use_too_many_res = False
-
-        vt100_p = screens.VT100Parser(receive_data_buffer, self.current_encoding)
-        screen = vt100_p.screen
 
         find_target = False
         target_index = -1
@@ -270,7 +278,8 @@ class API(object):
                     self._RDQ.add(screen)
                     if target == self._UseTooManyResources:
                         use_too_many_res = True
-                        # print(f'1 {use_too_many_res}')
+                        find_target = True
+                        log.logger.info(i18n.use_too_many_resources)
                         break
                     target.raise_exception()
 
@@ -291,17 +300,144 @@ class API(object):
                 elif refresh:
                     add_refresh = True
 
-                if add_refresh:
-                    if not msg.endswith(command.refresh):
-                        msg = msg + command.refresh
+                if add_refresh and not msg.endswith(command.refresh):
+                    msg += command.refresh
 
                 is_secret = target.is_secret()
 
                 if target.is_break_after_send():
-                    # break_index = target_list.index(target)
                     break_detect_after_send = True
                 break
         return screen, find_target, is_secret, break_detect_after_send, use_too_many_res, msg, target_index
+
+    def _stream_screen(self, encoding: str, data_chunk: bytes) -> str:
+        """Feed a newly-received chunk to the per-encoding incremental parser
+        and return the current screen. Each parser decodes and steps through
+        every byte exactly once across the whole receive sequence."""
+        parser = self._stream_parsers.get(encoding)
+        if parser is None:
+            parser = screens.IncrementalScreen(encoding, self.config.screen_height)
+            self._stream_parsers[encoding] = parser
+        parser.feed(data_chunk)
+        return parser.screen
+
+    async def _async_send(self, msg: str, target_list: list, screen_timeout: int, refresh: bool, secret: bool) -> int:
+        current_screen_timeout = self.config.screen_timeout if screen_timeout == 0 else screen_timeout
+        is_secret = secret
+        break_detect_after_send = False
+        use_too_many_res = False
+        received_any_byte = False
+
+        while True:
+            if refresh and msg and not msg.endswith(command.refresh):
+                msg += command.refresh
+
+            try:
+                encoded_msg = msg.encode('utf-8', 'replace')
+            except AttributeError:
+                encoded_msg = msg
+            except Exception as e:
+                traceback.print_tb(e.__traceback__)
+                print(e)
+                encoded_msg = msg.encode('utf-8', 'replace')
+
+            if is_secret:
+                log.logger.debug(i18n.send_msg, i18n.hide_sensitive_info)
+            else:
+                log.logger.debug(i18n.send_msg, str(encoded_msg))
+
+            try:
+                await self._core.send(encoded_msg)
+            except (websockets.exceptions.ConnectionClosed, websockets.exceptions.ConnectionClosedOK, RuntimeError):
+                raise exceptions.ConnectionClosed()
+
+            if break_detect_after_send:
+                return -1
+
+            msg = ''
+            # Fresh incremental parsers for this screen sequence. Each arriving
+            # chunk is fed once (per encoding) instead of re-parsing the whole
+            # accumulated buffer every time — turning the receive loop from
+            # O(N²) into O(N). The parsers also hold the rendered screen, so no
+            # separate raw byte buffer is accumulated.
+            self._stream_parsers = {}
+            start_time = time.time()
+            find_target = False
+            target_index = -1
+
+            try:
+                async with asyncio.timeout(current_screen_timeout):
+                    while True:
+                        try:
+                            data_chunk = await self._core.recv()
+                        except (websockets.exceptions.ConnectionClosed, websockets.exceptions.ConnectionClosedOK):
+                            if use_too_many_res:
+                                raise exceptions.UseTooManyResources()
+                            raise exceptions.ConnectionClosed()
+                        received_any_byte = True
+
+                        if isinstance(data_chunk, str):
+                            data_chunk = data_chunk.encode('utf-8')
+
+                        screen = self._stream_screen(self.current_encoding, data_chunk)
+                        screen, find_target, is_secret, break_detect_after_send, use_too_many_res, msg, target_index = \
+                            self._decode_screen(screen, start_time, target_list, is_secret, refresh, msg)
+
+                        if not find_target:
+                            # Auto-detect the server encoding: the alternate
+                            # parser has also seen every chunk so far (this
+                            # branch runs on every non-matching chunk), so
+                            # feeding it this chunk keeps it in sync.
+                            original_encoding = self.current_encoding
+                            self.current_encoding = 'big5uao' if original_encoding == 'utf-8' else 'utf-8'
+                            screen_ = self._stream_screen(self.current_encoding, data_chunk)
+                            screen_, find_target, is_secret, break_detect_after_send, use_too_many_res, msg, target_index = \
+                                self._decode_screen(screen_, start_time, target_list, is_secret, refresh, msg)
+                            if find_target:
+                                screen = screen_
+                            else:
+                                self.current_encoding = original_encoding
+
+                        if find_target:
+                            break
+            except TimeoutError:
+                # The incremental parser for the current encoding already holds
+                # the fully-rendered screen for every byte received this round
+                # (byte-identical to a fresh VT100Parser over the whole buffer —
+                # see tests/test_incremental_parity.py), so reuse it instead of
+                # re-decoding and re-parsing the entire buffer from scratch.
+                parser = self._stream_parsers.get(self.current_encoding)
+                if parser is not None:
+                    screen = parser.screen
+                    if len(screen) > 0:
+                        screens.show(self.config, screen)
+                        self._RDQ.add(screen)
+                if use_too_many_res:
+                    raise exceptions.UseTooManyResources()
+                # ponytail: zero bytes received this send() is NOT proof the
+                # connection is dead — pttbbs silently drops invalid keys
+                # without redrawing (measured: 5s of zero bytes on the lottery
+                # menu after sending a bad key, then the very next `q` exits
+                # cleanly in 0.00s, proving the connection was alive the whole
+                # time). So this is a hint for the caller, not a death
+                # verdict: record whether this round was totally silent and
+                # let the caller (e.g. _api_get_user.py) decide what a
+                # timeout with no bytes at all should mean for it. Counted
+                # per-send, not per-round, on purpose: a multi-round send()
+                # that goes silent midway still returns -1, which keeps
+                # _api_del_post.py's `timed_out = result == -1` reporting
+                # intact ("delete succeeded, but ...") on an irreversible op.
+                self.last_timeout_was_silent = not received_any_byte
+                return -1
+
+            if target_index != -1:
+                return target_index
+
+            if use_too_many_res:
+                raise exceptions.UseTooManyResources()
+
+            if not find_target:
+                return -1
 
     def send(self, msg: str, target_list: list, screen_timeout: int = 0, refresh: bool = True,
              secret: bool = False) -> int:
@@ -314,129 +450,113 @@ class API(object):
             raise exceptions.ParameterError('Item of TargetList must be TargetUnit')
 
         if self._UseTooManyResources not in target_list:
-            target_list.append(self._UseTooManyResources)
+            target_list = target_list + [self._UseTooManyResources]
 
-        if screen_timeout == 0:
-            current_screen_timeout = self.config.screen_timeout
-        else:
-            current_screen_timeout = screen_timeout
+        self.last_timeout_was_silent = False
 
-        break_detect_after_send = False
-        is_secret = secret
-
-        use_too_many_res = False
-        while True:
-
-            if refresh and not msg.endswith(command.refresh):
-                msg = msg + command.refresh
-
-            try:
-                msg = msg.encode('utf-8', 'replace')
-            except AttributeError:
-                pass
-            except Exception as e:
-                traceback.print_tb(e.__traceback__)
-                print(e)
-                msg = msg.encode('utf-8', 'replace')
-
-            if is_secret:
-                log.logger.debug(i18n.send_msg, i18n.hide_sensitive_info)
+        if self.config.connect_mode == data_type.ConnectMode.TELNET:
+            # Original Telnet logic remains, as it doesn't use asyncio
+            if screen_timeout == 0:
+                current_screen_timeout = self.config.screen_timeout
             else:
-                log.logger.debug(i18n.send_msg, str(msg))
-
-            if self.config.connect_mode == data_type.ConnectMode.TELNET:
+                current_screen_timeout = screen_timeout
+            break_detect_after_send = False
+            is_secret = secret
+            use_too_many_res = False
+            while True:
+                if refresh and not msg.endswith(command.refresh):
+                    msg = msg + command.refresh
+                try:
+                    msg = msg.encode('utf-8', 'replace')
+                except AttributeError:
+                    pass
+                if is_secret:
+                    log.logger.debug(i18n.send_msg, i18n.hide_sensitive_info)
+                else:
+                    log.logger.debug(i18n.send_msg, str(msg))
                 try:
                     self._core.read_very_eager()
                     self._core.write(msg)
                 except EOFError:
                     raise exceptions.ConnectionClosed()
-            else:
-                try:
-                    asyncio.get_event_loop().run_until_complete(
-                        self._core.send(msg))
-                except websockets.exceptions.ConnectionClosedError:
-                    raise exceptions.ConnectionClosed()
-                except RuntimeError:
-                    raise exceptions.ConnectionClosed()
-                except websockets.exceptions.ConnectionClosedOK:
-                    raise exceptions.ConnectionClosed()
-
                 if break_detect_after_send:
                     return -1
-
-            msg = ''
-            receive_data_buffer = bytes()
-
-            start_time = time.time()
-            mid_time = time.time()
-            while mid_time - start_time < current_screen_timeout:
-
-                # print(1)
-                recv_data_obj = RecvData()
-
-                if self.config.connect_mode == data_type.ConnectMode.TELNET:
-                    try:
-                        recv_data_obj.data = self._core.read_very_eager()
-                    except EOFError:
-                        return -1
-
-                else:
-                    try:
-
-                        asyncio.get_event_loop().run_until_complete(
-                            websocket_receiver(
-                                self._core, current_screen_timeout, recv_data_obj))
-
-                    except websockets.exceptions.ConnectionClosed:
-                        if use_too_many_res:
-                            raise exceptions.UseTooManyResources()
-                        raise exceptions.ConnectionClosed()
-                    except websockets.exceptions.ConnectionClosedOK:
-                        raise exceptions.ConnectionClosed()
-                    except asyncio.TimeoutError:
-                        return -1
-                    except RuntimeError:
-                        raise exceptions.ConnectionClosed()
-
-                receive_data_buffer += recv_data_obj.data
-
-                screen, find_target, is_secret, break_detect_after_send, use_too_many_res, msg, target_index = \
-                    self._decode_screen(receive_data_buffer, start_time, target_list, is_secret, refresh, msg)
-
-                if self.current_encoding == 'big5uao' and not find_target:
-                    self.current_encoding = 'utf-8'
-                    screen_, find_target, is_secret, break_detect_after_send, use_too_many_res, msg, target_index = \
-                        self._decode_screen(receive_data_buffer, start_time, target_list, is_secret, refresh, msg)
-
-                    if find_target:
-                        screen = screen_
-                    else:
-                        self.current_encoding = 'big5uao'
-
-                # print(4)
-                if target_index != -1:
-                    return target_index
-
-                if use_too_many_res:
-                    continue
-
-                if find_target:
-                    break
-                if len(screen) > 0:
-                    screens.show(self.config, screen)
-                    self._RDQ.add(screen)
-
-                # print(6)
-
+                msg = ''
+                self._stream_parsers = {}
+                start_time = time.time()
                 mid_time = time.time()
+                while mid_time - start_time < current_screen_timeout:
+                    try:
+                        data = self._core.read_very_eager()
+                    except EOFError:
+                        # ponytail: known gap — write EOF above raises
+                        # ConnectionClosed, read EOF here returns -1, so a dead
+                        # Telnet link can still surface as NoSuchUser/NoSuchBoard
+                        # upstream (same bug the websocket path was fixed for).
+                        # Left alone deliberately: raising here carries the
+                        # _api_del_post.py:351 `timed_out = result == -1`
+                        # blast radius and there is no Telnet test harness to
+                        # verify against. Fix when Telnet gets one.
+                        return -1
+                    screen = self._stream_screen(self.current_encoding, data)
+                    screen, find_target, is_secret, break_detect_after_send, use_too_many_res, msg, target_index = \
+                        self._decode_screen(screen, start_time, target_list, is_secret, refresh, msg)
+                    if target_index != -1:
+                        return target_index
+                    if use_too_many_res:
+                        continue
+                    if find_target:
+                        break
+                    if len(screen) > 0:
+                        screens.show(self.config, screen)
+                        self._RDQ.add(screen)
+                    mid_time = time.time()
+                if not find_target:
+                    return -1
+            return -2
+        else:
+            loop = self._get_event_loop()
+            return loop.run_until_complete(
+                self._async_send(msg, target_list, screen_timeout, refresh, secret)
+            )
 
-            if not find_target:
-                return -1
-        return -2
+    def set_screen_height(self, height: int) -> None:
+        """Send a mid-session NAWS to resize the terminal, then update config."""
+        naws = (
+            b'\xff\xfb\x1f'
+            + b'\xff\xfa\x1f\x00\x50' + bytes([0, height]) + b'\xff\xf0'
+        )
+        loop = self._get_event_loop()
+        loop.run_until_complete(self._core.send(naws))
+        self.config.screen_height = height
 
     def close(self):
         if self.config.connect_mode == data_type.ConnectMode.WEBSOCKETS:
-            asyncio.get_event_loop().run_until_complete(self._core.close())
+            # close_code is None until a close frame lands — true on both the legacy
+            # WebSocketClientProtocol and the websockets>=14 ClientConnection (which
+            # dropped .closed/.open entirely).
+            if self._core and self._core.close_code is None:
+                loop = self._get_event_loop()
+                try:
+                    loop.run_until_complete(asyncio.wait_for(self._core.close(), timeout=2.0))
+                except (asyncio.TimeoutError, RuntimeError):
+                    pass
+            # 若 close 逾時，websocket 的背景 task(keepalive_ping/transfer_data/
+            # close_connection)會殘留 pending；主動取消並跑完，再關閉 loop，否則 loop 被 GC 時
+            # 會噴 "Task was destroyed but it is pending" 與 "no running event loop"。
+            if self._loop is not None and not self._loop.is_closed():
+                try:
+                    pending = asyncio.all_tasks(self._loop)
+                    for task in pending:
+                        task.cancel()
+                    if pending:
+                        self._loop.run_until_complete(
+                            asyncio.gather(*pending, return_exceptions=True))
+                    self._loop.run_until_complete(self._loop.shutdown_asyncgens())
+                except RuntimeError:
+                    pass
+                finally:
+                    self._loop.close()
         else:
             self._core.close()
 

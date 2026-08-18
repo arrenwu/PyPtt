@@ -1,3 +1,18 @@
+# NOTE: The cert / key below are a throwaway self-signed pair. They do not
+# represent any identity — the subject is literally "CN=Common Name". PTT
+# never validates it (see below), so it is committed as a fixed pair that
+# never needs regenerating.
+#
+# Why it exists: in some client environments (specific OpenSSL versions /
+# middleboxes), the TLS handshake against wss://ws.ptt.cc fails when the
+# client does not present any certificate. Presenting any self-signed cert
+# avoids the failure path. PTT's server does not validate the contents of
+# this cert, so the public private key here grants no privilege beyond
+# what an anonymous client already has on a public BBS.
+#
+# The actual server-side TLS verification (CA bundle + hostname check) is
+# performed in connect_core.ssl_init().
+
 key = """-----BEGIN EC PARAMETERS-----
 BggqhkjOPQMBBw==
 -----END EC PARAMETERS-----

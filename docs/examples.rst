@@ -80,9 +80,9 @@
     import PyPtt
 
     content = [
-        PTT.command.Ctrl_C + PTT.command.Left + '5' + PTT.command.Right + '這是閃爍字' + PTT.command.Ctrl_C,
-        PTT.command.Ctrl_C + PTT.command.Left + '31' + PTT.command.Right + '前景紅色' + PTT.command.Ctrl_C,
-        PTT.command.Ctrl_C + PTT.command.Left + '44' + PTT.command.Right + '背景藍色' + PTT.command.Ctrl_C,
+        PyPtt.command.ctrl_c + PyPtt.command.left + '5' + PyPtt.command.right + '這是閃爍字' + PyPtt.command.ctrl_c,
+        PyPtt.command.ctrl_c + PyPtt.command.left + '31' + PyPtt.command.right + '前景紅色' + PyPtt.command.ctrl_c,
+        PyPtt.command.ctrl_c + PyPtt.command.left + '44' + PyPtt.command.right + '背景藍色' + PyPtt.command.ctrl_c,
     ]
     content = '\n'.join(content)
 
@@ -95,6 +95,36 @@
 
 .. image:: _static/color_demo.png
 
+色碼對照
+^^^^^^^^^^^^
+色碼是標準 ANSI SGR 參數，可以用 ``;`` 串接多個屬性：
+
+- 重置 ``0``、高亮（亮色）``1``、閃爍 ``5``
+- 前景色：``30`` 黑 ``31`` 紅 ``32`` 綠 ``33`` 黃 ``34`` 藍 ``35`` 洋紅 ``36`` 青 ``37`` 白
+- 背景色：``40`` 黑 ``41`` 紅 ``42`` 綠 ``43`` 黃 ``44`` 藍 ``45`` 洋紅 ``46`` 青 ``47`` 白
+
+組合色碼與一行多色
+^^^^^^^^^^^^^^^^^^^^^^^^
+上面每一段的原理是：``command.ctrl_c`` 在編輯器插入一組 ANSI 色碼，``command.left`` 把游標退到屬性欄位，輸入色碼後 ``command.right`` 移出，接著打上要上色的文字，最後再一個 ``command.ctrl_c`` 把顏色重置。
+
+把多個屬性用 ``;`` 串起來就能疊加，例如 ``1;33;44`` 是「亮黃字配藍底」；同一行也可以放多段不同顏色。實務上包一個小函式重複使用會更好讀：
+
+.. code-block:: python
+
+    import PyPtt
+    c, left, right = PyPtt.command.ctrl_c, PyPtt.command.left, PyPtt.command.right
+
+    def color(attr, text):
+        # attr 例如 '1;33;44' 代表亮黃字、藍底
+        return c + left + attr + right + text + c
+
+    content = (
+        color('1;31', '紅') + color('1;32', '綠') + color('1;33', '黃') + '\n'
+        + color('1;33;44', ' 亮黃字藍底 ') + '  ' + color('1;36', '亮青字')
+    )
+
+同樣的技巧也可以用在 :doc:`api/set_signature_file`，寫出彩色的名片檔（名片檔在查詢畫面大約只顯示 16 行，設計時請留意行數）。
+
 .. _check_post_status:
 
 如何判斷文章資料是否可以使用
@@ -102,6 +132,8 @@
 當 :doc:`api/get_post` 回傳文章資料回來時，這時需要一些判斷來決定是否要使用這些資料。
 
 .. code-block:: python
+
+    import sys
 
     import PyPtt
 
@@ -169,7 +201,7 @@
             post_info = ptt_bot.get_post('Stock', aid='1c5YhY_K')
 
             # output False
-            print(post_info['pass_format_check'])
+            print(post_info[PyPtt.PostField.pass_format_check])
 
             # Add custom content_end_list
 
@@ -179,7 +211,7 @@
             post_info = ptt_bot.get_post('Stock', aid='1c5YhY_K')
 
             # output True
-            print(post_info['pass_format_check'])
+            print(post_info[PyPtt.PostField.pass_format_check])
 
         except Exception as e:
             print(e)
@@ -189,4 +221,4 @@
 | 這樣就可以透過新增文章結尾的方式來達到通過格式檢查的效果。
 | 你可以在 `PyPtt.screens.Target`_ 找到更多可以修改的屬性。
 
-.. _PyPtt.screens.Target: https://github.com/PyPtt/PyPtt/blob/master/PyPtt/screens.py#L11-L162
+.. _PyPtt.screens.Target: https://github.com/PyPtt/PyPtt/blob/master/PyPtt/screens.py#L11-L173

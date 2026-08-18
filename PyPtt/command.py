@@ -29,3 +29,6 @@ refresh = ctrl_l
 control_code = ctrl_u + star
 backspace = ctrl_h
 tilde = r'~'
+
+page_up = 'P'
+page_down = 'N'

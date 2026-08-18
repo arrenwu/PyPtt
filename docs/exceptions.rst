@@ -20,6 +20,13 @@
 
     登入失敗。
 
+.. py:exception:: PyPtt.exceptions.TwoFactorAuthRequired
+    :module: PyPtt
+
+    偵測到 PTT 的兩階段驗證畫面。PyPtt 無法自動完成驗證，僅能偵測並中斷登入流程。PTT 可設定為
+    僅新 IP 需要驗證，同一 IP 再次登入時會跳過此步驟；建議先在同一台機器上用一般 BBS 客戶端手動
+    登入一次以完成驗證。繼承自 :py:exc:`PyPtt.exceptions.LoginError`。
+
 .. py:exception:: PyPtt.exceptions.NoFastComment
     :module: PyPtt
 
@@ -144,5 +151,17 @@
     :module: PyPtt
 
     請重新設定聯絡信箱。
+
+.. py:exception:: PyPtt.exceptions.ParameterError
+    :module: PyPtt
+
+    參數錯誤，呼叫時傳入的參數值或組合不合法（例如 :doc:`api/post` 於 ``anonymous=False``
+    時仍傳入 ``display_id``）。
+
+.. py:exception:: PyPtt.exceptions.BadPostNotRecorded
+    :module: PyPtt
+
+    板主刪除他人文章並指定 :ref:`bad-post-type` 時，文章已成功刪除，但 PTT 端沒有完成惡退（劣文）
+    記錄流程（例如文章太舊而跳過惡退選單）。呼叫端應理解「刪除成功，但惡退未記錄」。
 
 .. _水桶: https://pttpedia.fandom.com/zh/wiki/%E6%B0%B4%E6%A1%B6

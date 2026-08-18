@@ -64,6 +64,10 @@ def get_board_list(api) -> list:
     cmd = ''.join(cmd_list)
 
     board_list = []
+    # NOTE: expanded_screen is intentionally NOT used here.
+    # get_board_list traverses all boards sequentially; a mid-session NAWS resize
+    # causes PTT to render the first page at the old size before the resize takes
+    # effect, producing inconsistent page boundaries and skipping boards.
     while True:
 
         api.connect_core.send(
@@ -101,7 +105,10 @@ def get_board_list(api) -> list:
             board_list.append(board_name)
 
             if api.config.log_level == log.INFO:
-                pb.update(no)
+                # ponytail: max_no is parsed from the last-page screen and can
+                # undercount by one on some board sets; the bar is cosmetic, so
+                # clamp instead of letting pb.update raise and abort get_all_boards.
+                pb.update(min(no, max_no))
 
         if no >= max_no:
             break

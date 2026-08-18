@@ -1,4 +1,5 @@
 import time
+from enum import IntEnum
 from enum import auto
 
 from AutoStrEnum import AutoStrEnum
@@ -100,12 +101,30 @@ class PostField(AutoStrEnum):
     is_unconfirmed = auto()
 
 
-# class WaterballInfo:
-#     def __init__(self, waterball_type, target, content, date):
-#         self.type: int = parse_para(int, waterball_type)
-#         self.target: str = parse_para(str, target)
-#         self.content: str = parse_para(str, content)
-#         self.date: str = parse_para(str, date)
+class CallStatus(AutoStrEnum):
+    ON = auto()
+    UNPLUG = auto()
+    WATERPROOF = auto()
+    FRIEND = auto()
+    OFF = auto()
+
+
+class WaterballType(AutoStrEnum):
+    SEND = auto()
+    CATCH = auto()
+
+
+class WaterballPostAction(AutoStrEnum):
+    CLEAR = auto()
+    MAILBOX = auto()
+    KEEP = auto()
+
+
+class WaterballField(AutoStrEnum):
+    type = auto()
+    target = auto()
+    content = auto()
+    date = auto()
 
 
 class Cursor:
@@ -144,6 +163,19 @@ class MarkType(AutoStrEnum):
     M = auto()
     # 待證實文章
     UNCONFIRMED = auto()
+
+
+class BadPostType(IntEnum):
+    # 版主刪除他人文章時的惡退（劣文）分類，對應 PTT 選單的數字選項。
+
+    # 廣告
+    AD = 1
+    # 不當用辭
+    BAD_LANGUAGE = 2
+    # 人身攻擊
+    PERSONAL_ATTACK = 3
+    # 其他
+    OTHER = 4
 
 
 class FavouriteBoardField(AutoStrEnum):
