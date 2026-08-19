@@ -32,8 +32,8 @@ def moderator_operation_reset(api, board: str, ptt_id: str):
         raise exceptions.UnregisteredUser(lib_util.get_current_func_name())
 
     check_value.check_type(board, str, 'board')
-    check_value.check_type(bucket_days, int, 'bucket_days')
-    check_value.check_type(reason, str, 'reason')
+    # check_value.check_type(bucket_days, int, 'bucket_days')
+    # check_value.check_type(reason, str, 'reason')
     check_value.check_type(ptt_id, str, 'ptt_id')
 
     _api_util.check_user_exist(api, ptt_id)

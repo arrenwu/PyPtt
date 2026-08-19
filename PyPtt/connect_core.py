@@ -21,8 +21,6 @@ from . import log
 from . import screens
 from . import ssl_config
 
-from .. import PyPtt
-
 # ponytail: pass the UA per-connect instead of mutating websockets' module global.
 # The global is baked into connect()'s default arg the moment websockets lazily
 # imports asyncio.client, so mutating it only works if you get there first —
@@ -34,7 +32,8 @@ except ImportError:  # websockets < 13
 
 # __version__='1.1.2'  Old setup
 
-USER_AGENT = f'{_WS_USER_AGENT} PyPtt/{PyPtt.__version__}'
+hardcoded_version = '2.3.6'
+USER_AGENT = f'{_WS_USER_AGENT} PyPtt/{hardcoded_version}'
 
 def ssl_init(verify_ssl: bool = True) -> ssl.SSLContext:
     # Verify the PTT server certificate against the system CA bundle.

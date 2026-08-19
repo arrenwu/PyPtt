@@ -65,8 +65,9 @@ def _str_pos_at_cells(line: str, cells: int) -> int:
 class Target:
     MainMenu = [
         '離開，再見',
-        '人, 我是',
-        '[呼叫器]',
+        '人,',
+        '我是',
+        '呼叫器',
     ]
 
     MainMenu_Exiting = [
