@@ -30,9 +30,8 @@ try:
 except ImportError:  # websockets < 13
     from websockets.http import USER_AGENT as _WS_USER_AGENT
 
-# __version__='1.1.2'  Old setup
 
-hardcoded_version = '2.3.6'
+hardcoded_version = '2.3.8'
 USER_AGENT = f'{_WS_USER_AGENT} PyPtt/{hardcoded_version}'
 
 def ssl_init(verify_ssl: bool = True) -> ssl.SSLContext:
