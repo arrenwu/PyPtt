@@ -9,6 +9,8 @@ import traceback
 import warnings
 from typing import Any
 
+from .. import PyPtt
+
 import certifi
 import websockets
 import websockets.exceptions
@@ -31,8 +33,7 @@ except ImportError:  # websockets < 13
     from websockets.http import USER_AGENT as _WS_USER_AGENT
 
 
-hardcoded_version = '2.3.8'
-USER_AGENT = f'{_WS_USER_AGENT} PyPtt/{hardcoded_version}'
+USER_AGENT = f'{_WS_USER_AGENT} PyPtt/{PyPtt.__version__}'
 
 def ssl_init(verify_ssl: bool = True) -> ssl.SSLContext:
     # Verify the PTT server certificate against the system CA bundle.
