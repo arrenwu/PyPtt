@@ -90,7 +90,7 @@ def copy_toggled_article_to_selected_zone(api, board:str , route: str, confirm_b
     ori_screen = api.connect_core.get_screen_queue()[-1]
     cursor_line = get_cursor_line_from_screen(api, ori_screen)
     #● 615. ◇ [萌夯] 哇操 國民黨水母                      arrenwu      [03/07/25]
-    LATEST_INDEX_PATTERN = re.compile(r'{} *(?P<latest_index>\d+)\. ◇'.format(api.cursor))
+    LATEST_INDEX_PATTERN = re.compile(r'{} *(?P<latest_index>\d+)\. +◇'.format(api.cursor))
 
     latest_index_match_result = LATEST_INDEX_PATTERN.search(cursor_line)
 
