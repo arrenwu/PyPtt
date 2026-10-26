@@ -72,15 +72,16 @@ def copy_toggled_article_to_selected_zone(api, board:str , route: str, confirm_b
     cmd_list = []
 
     cmd_list.append('z')
-    cmd_list.append(route)
+    cmd_list.append('z'+route)
     cmd_list.append(command.enter)
     cmd_list.append(command.enter)
     cmd_list.append(command.end)
+    cmd_list.append(command.ctrl_p)
     cmd = ''.join(cmd_list)
 
     target_list=[]
     target_list = [
-        connect_core.TargetUnit('【板  主】  (n)新增文章 (g)新增目錄 (e)編輯檔案', break_detect=True),
+        connect_core.TargetUnit('精華管理  (n)新增文章 (g)新增目錄 (e)編輯檔案', break_detect=True),
     ]
 
     api.connect_core.send(
@@ -95,17 +96,12 @@ def copy_toggled_article_to_selected_zone(api, board:str , route: str, confirm_b
     latest_index_match_result = LATEST_INDEX_PATTERN.search(cursor_line)
 
     if latest_index_match_result is None:
-        print("此篇文章應為該精華區的第一篇文章")
-        next_index = 1
-    else:
-        next_index = int(latest_index_match_result['latest_index']) + 1
+        print('精華區有複製問題')
 
-    cmd_list.append(command.ctrl_p)
-    cmd = ''.join(cmd_list)
+    next_index = int(latest_index_match_result['latest_index'])
 
-    target_list=[]
     target_list = [
-        connect_core.TargetUnit('【板  主】  (n)新增文章 (g)新增目錄 (e)編輯檔案', response='q'),
+        connect_core.TargetUnit('精華管理  (n)新增文章 (g)新增目錄 (e)編輯檔案', response='q'),
         connect_core.TargetUnit(screens.Target.InBoard, break_detect=True),
     ]
 
